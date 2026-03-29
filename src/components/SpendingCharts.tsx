@@ -168,7 +168,7 @@ export default function SpendingCharts({
               No data yet
             </div>
           ) : (
-            <div className="flex-1 min-h-[220px]">
+            <div className="min-h-[220px] h-[220px]">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={displayMonthlyData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" vertical={false} />
