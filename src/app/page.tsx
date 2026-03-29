@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import Link from "next/link";
 import { listAnalyses, loadAnalysis } from "@/lib/analysis-storage";
 import { loadRecurring, detectAndSaveRecurring } from "@/lib/recurring";
