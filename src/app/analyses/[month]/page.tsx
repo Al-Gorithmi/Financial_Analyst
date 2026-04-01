@@ -595,8 +595,14 @@ export default function MonthAnalysisPage() {
                           <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-400 align-middle" title="Category uncertain" />
                         )}
                       </td>
-                      <td className={`px-4 py-3 text-right tabular-nums font-medium whitespace-nowrap ${txn.type === "credit" ? "text-green-400" : "text-zinc-100"}`}>
-                        {txn.type === "credit" ? "+" : ""}{CAD2.format(txn.amount)}
+                      <td className="px-4 py-3 text-right tabular-nums whitespace-nowrap">
+                        <button
+                          onClick={() => updateTxn(txn, { type: txn.type === "credit" ? "debit" : "credit" })}
+                          className={`font-medium hover:opacity-70 transition-opacity ${txn.type === "credit" ? "text-green-400" : "text-zinc-100"}`}
+                          title="Click to flip income / spending"
+                        >
+                          {txn.type === "credit" ? "+" : ""}{CAD2.format(txn.amount)}
+                        </button>
                       </td>
                       {/* Category cell */}
                       <td className="px-4 py-3">
