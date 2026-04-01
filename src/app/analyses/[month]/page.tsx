@@ -22,6 +22,8 @@ const CATEGORIES = [
   "Travel", "Utilities", "Fees", "Donations", "Investments", "Other",
 ];
 
+const NECESSITIES = ["Must", "Essential", "Good to Have", "Optional", "Non-Essential"];
+
 type NecessityLevel = "Must" | "Essential" | "Good to Have" | "Optional" | "Non-Essential";
 
 function necessityBadgeClass(necessity: string): string {
@@ -218,10 +220,13 @@ export default function MonthAnalysisPage() {
   const [generatingInsights, setGeneratingInsights] = useState(false);
   const [insightsError, setInsightsError] = useState("");
   const [editingTxnId, setEditingTxnId] = useState<string | null>(null);
+  const [editingNecessityId, setEditingNecessityId] = useState<string | null>(null);
   const [savingTxnId, setSavingTxnId] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<string>("All");
   const [necessityFilter, setNecessityFilter] = useState<string>("All");
-  const [txnTab, setTxnTab] = useState<"spending" | "income">("spending");
+  const [txnTab, setTxnTab] = useState<"spending" | "income" | "transfers">("spending");
+  const [reanalyzing, setReanalyzing] = useState(false);
+  const [reanalyzeError, setReanalyzeError] = useState("");
 
   useEffect(() => {
     if (!month) return;
@@ -249,30 +254,59 @@ export default function MonthAnalysisPage() {
     }
   }, [month]);
 
-  const updateCategory = useCallback(async (txn: SavedTransaction, category: string) => {
+  const updateTxn = useCallback(async (
+    txn: SavedTransaction,
+    patch: Partial<Pick<SavedTransaction, "category" | "necessity" | "isTransfer" | "type">>
+  ) => {
     setSavingTxnId(txn.id);
     setEditingTxnId(null);
+    setEditingNecessityId(null);
     try {
+      const body: Record<string, unknown> = { ...patch };
+      if (patch.category !== undefined) body.merchantKey = txn.merchantKey;
       await fetch(`/api/analyses/${month}/transactions/${txn.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ category, merchantKey: txn.merchantKey }),
+        body: JSON.stringify(body),
       });
       setAnalysis((prev) => {
         if (!prev) return prev;
         return {
           ...prev,
           transactions: prev.transactions.map((t) =>
-            t.id === txn.id ? { ...t, category, userTagged: true } : t
+            t.id === txn.id ? { ...t, ...patch, userTagged: true } : t
           ),
         };
       });
     } catch (e) {
-      console.error("Failed to update category:", e);
+      console.error("Failed to update transaction:", e);
     } finally {
       setSavingTxnId(null);
     }
   }, [month]);
+
+  const reanalyze = useCallback(async () => {
+    if (!analysis) return;
+    if (!confirm("Re-run AI analysis for this month? Your manual category edits will be reset.")) return;
+    setReanalyzing(true);
+    setReanalyzeError("");
+    try {
+      const res = await fetch("/api/analyse-month", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ month: analysis.month, statementIds: analysis.statementIds }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Reanalysis failed");
+      // Re-fetch the updated analysis
+      const fresh = await fetch(`/api/analyses/${month}`).then(r => r.json());
+      setAnalysis(fresh);
+    } catch (e) {
+      setReanalyzeError(e instanceof Error ? e.message : "Reanalysis failed");
+    } finally {
+      setReanalyzing(false);
+    }
+  }, [analysis, month]);
 
   // Navigation: prev/next months
   const [year, monthNum] = month ? month.split("-").map(Number) : [0, 0];
@@ -325,7 +359,8 @@ export default function MonthAnalysisPage() {
 
   const spendingTxns = analysis.transactions.filter(t => !t.isTransfer && t.type !== "credit");
   const incomeTxns = analysis.transactions.filter(t => !t.isTransfer && t.type === "credit");
-  const activeTxns = txnTab === "spending" ? spendingTxns : incomeTxns;
+  const transferTxns = analysis.transactions.filter(t => t.isTransfer);
+  const activeTxns = txnTab === "spending" ? spendingTxns : txnTab === "income" ? incomeTxns : transferTxns;
 
   const filteredTxns = activeTxns
     .filter(t => categoryFilter === "All" || t.category === categoryFilter)
@@ -350,8 +385,25 @@ export default function MonthAnalysisPage() {
               Next →
             </Link>
           )}
+          <button
+            onClick={reanalyze}
+            disabled={reanalyzing}
+            className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-400 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {reanalyzing ? (
+              <span className="flex items-center gap-1.5">
+                <span className="h-3 w-3 animate-spin rounded-full border-2 border-zinc-600 border-t-zinc-300" />
+                Reanalyzing…
+              </span>
+            ) : "Reanalyze"}
+          </button>
         </div>
       </div>
+      {reanalyzeError && (
+        <div className="px-8 py-2 text-xs text-red-400 bg-red-950/30 border-b border-red-900/40">
+          Reanalysis failed: {reanalyzeError}
+        </div>
+      )}
 
       <main className="w-full px-8 py-6 flex flex-col gap-8">
         {/* Summary cards */}
@@ -412,6 +464,13 @@ export default function MonthAnalysisPage() {
                 Income
                 <span className="ml-2 text-xs opacity-70">{incomeTxns.length}</span>
               </button>
+              <button
+                onClick={() => { setTxnTab("transfers"); setCategoryFilter("All"); setNecessityFilter("All"); }}
+                className={`rounded-lg px-4 py-1.5 text-sm font-medium transition-colors ${txnTab === "transfers" ? "bg-zinc-700/60 text-zinc-200" : "text-zinc-500 hover:text-zinc-300"}`}
+              >
+                Excluded
+                <span className="ml-2 text-xs opacity-70">{transferTxns.length}</span>
+              </button>
             </div>
             <div className="flex items-center gap-2">
               {txnTab === "spending" && lowConfidenceCount > 0 && (
@@ -420,124 +479,213 @@ export default function MonthAnalysisPage() {
                   {lowConfidenceCount} need review
                 </span>
               )}
-              <select
-                value={necessityFilter}
-                onChange={(e) => setNecessityFilter(e.target.value)}
-                className="rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              >
-                {necessitiesInData.map((n) => (
-                  <option key={n} value={n}>{n === "All" ? "All Necessity" : n}</option>
-                ))}
-              </select>
-              <select
-                value={categoryFilter}
-                onChange={(e) => setCategoryFilter(e.target.value)}
-                className="rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              >
-                {categoriesInData.map((c) => (
-                  <option key={c} value={c}>{c === "All" ? "All Categories" : c}</option>
-                ))}
-              </select>
+              {txnTab !== "transfers" && (
+                <>
+                  <select
+                    value={necessityFilter}
+                    onChange={(e) => setNecessityFilter(e.target.value)}
+                    className="rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    {necessitiesInData.map((n) => (
+                      <option key={n} value={n}>{n === "All" ? "All Necessity" : n}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={categoryFilter}
+                    onChange={(e) => setCategoryFilter(e.target.value)}
+                    className="rounded-md border border-zinc-700 bg-zinc-800 px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    {categoriesInData.map((c) => (
+                      <option key={c} value={c}>{c === "All" ? "All Categories" : c}</option>
+                    ))}
+                  </select>
+                </>
+              )}
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-zinc-800 bg-zinc-800/50">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-500 uppercase tracking-wide">Date</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-500 uppercase tracking-wide">Description</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-zinc-500 uppercase tracking-wide">Amount</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-500 uppercase tracking-wide">Category</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-500 uppercase tracking-wide">Necessity</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-800">
-                {filteredTxns.map((txn) => (
-                  <tr
-                    key={txn.id}
-                    className={
-                      txn.confidence === "low" && !txn.userTagged
-                        ? "bg-amber-950/20"
-                        : ""
-                    }
-                  >
-                    <td className="px-4 py-3 text-xs text-zinc-500 whitespace-nowrap">
-                      {txn.date}
-                    </td>
-                    <td className="px-4 py-3 max-w-xs">
-                      <span className="block truncate text-zinc-200">
-                        {txn.cleanDescription ?? txn.description}
-                      </span>
-                      {txn.cleanDescription && txn.cleanDescription !== txn.description && (
-                        <span className="block truncate text-[11px] text-zinc-500">{txn.description}</span>
-                      )}
-                      {txn.confidence === "low" && !txn.userTagged && (
-                        <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-400 align-middle" title="Category uncertain" />
-                      )}
-                    </td>
-                    <td className={`px-4 py-3 text-right tabular-nums font-medium whitespace-nowrap ${txn.type === "credit" ? "text-green-400" : "text-zinc-100"}`}>
-                      {txn.type === "credit" ? "+" : ""}{CAD2.format(txn.amount)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {editingTxnId === txn.id ? (
-                        <select
-                          autoFocus
-                          defaultValue={txn.category}
-                          onBlur={() => setEditingTxnId(null)}
-                          onChange={(e) => updateCategory(txn, e.target.value)}
-                          className="rounded-md border border-blue-600 bg-zinc-800 px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                        >
-                          {CATEGORIES.map((c) => (
-                            <option key={c} value={c}>{c}</option>
-                          ))}
-                        </select>
-                      ) : savingTxnId === txn.id ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-zinc-800 px-2.5 py-1 text-xs text-zinc-400">
-                          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-zinc-500" />
-                          Saving…
-                        </span>
-                      ) : (
-                        <button
-                          onClick={() => setEditingTxnId(txn.id)}
-                          className={[
-                            "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium hover:ring-1 hover:ring-blue-500 transition-all",
-                            txn.userTagged
-                              ? "bg-green-950/50 text-green-300"
-                              : txn.confidence === "low"
-                              ? "bg-amber-950/50 text-amber-300"
-                              : "bg-zinc-800 text-zinc-400",
-                          ].join(" ")}
-                          title="Click to change category"
-                        >
-                          {txn.category}
-                        </button>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      {txn.necessity ? (
-                        <span
-                          className={[
-                            "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium",
-                            necessityBadgeClass(txn.necessity),
-                          ].join(" ")}
-                        >
-                          {txn.necessity}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-zinc-600">—</span>
-                      )}
-                    </td>
+          {txnTab === "transfers" ? (
+            /* Excluded/Transfers tab — simple list with Include button */
+            <div className="overflow-x-auto">
+              {transferTxns.length === 0 ? (
+                <div className="px-6 py-8 text-center text-sm text-zinc-500">No excluded transactions.</div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-zinc-800 bg-zinc-800/50">
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-500 uppercase tracking-wide">Date</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-500 uppercase tracking-wide">Description</th>
+                      <th className="px-4 py-3 text-right text-xs font-semibold text-zinc-500 uppercase tracking-wide">Amount</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-500 uppercase tracking-wide">Category</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-500 uppercase tracking-wide w-28">Include</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-800">
+                    {transferTxns.map((txn) => (
+                      <tr key={txn.id} className="opacity-70 hover:opacity-100 transition-opacity">
+                        <td className="px-4 py-3 text-xs text-zinc-500 whitespace-nowrap">{txn.date}</td>
+                        <td className="px-4 py-3 max-w-xs">
+                          <span className="block truncate text-zinc-300">{txn.cleanDescription ?? txn.description}</span>
+                          {txn.cleanDescription && txn.cleanDescription !== txn.description && (
+                            <span className="block truncate text-[11px] text-zinc-500">{txn.description}</span>
+                          )}
+                        </td>
+                        <td className={`px-4 py-3 text-right tabular-nums font-medium whitespace-nowrap ${txn.type === "credit" ? "text-green-400" : "text-zinc-300"}`}>
+                          {txn.type === "credit" ? "+" : ""}{CAD2.format(txn.amount)}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium bg-zinc-800 text-zinc-400">
+                            {txn.category}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          {savingTxnId === txn.id ? (
+                            <span className="text-xs text-zinc-500">Saving…</span>
+                          ) : (
+                            <button
+                              onClick={() => updateTxn(txn, { isTransfer: false })}
+                              className="rounded-md border border-zinc-600 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 transition-colors"
+                              title="Include in spending/income totals"
+                            >
+                              Include
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          ) : (
+            /* Spending / Income tabs */
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-zinc-800 bg-zinc-800/50">
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-500 uppercase tracking-wide">Date</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-500 uppercase tracking-wide">Description</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-zinc-500 uppercase tracking-wide">Amount</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-500 uppercase tracking-wide">Category</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-500 uppercase tracking-wide">Necessity</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-500 uppercase tracking-wide w-20">Exclude</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-            {filteredTxns.length === 0 && (
-              <div className="px-6 py-8 text-center text-sm text-zinc-500">
-                No transactions in this category.
-              </div>
-            )}
-          </div>
+                </thead>
+                <tbody className="divide-y divide-zinc-800">
+                  {filteredTxns.map((txn) => (
+                    <tr
+                      key={txn.id}
+                      className={
+                        txn.confidence === "low" && !txn.userTagged
+                          ? "bg-amber-950/20"
+                          : ""
+                      }
+                    >
+                      <td className="px-4 py-3 text-xs text-zinc-500 whitespace-nowrap">
+                        {txn.date}
+                      </td>
+                      <td className="px-4 py-3 max-w-xs">
+                        <span className="block truncate text-zinc-200">
+                          {txn.cleanDescription ?? txn.description}
+                        </span>
+                        {txn.cleanDescription && txn.cleanDescription !== txn.description && (
+                          <span className="block truncate text-[11px] text-zinc-500">{txn.description}</span>
+                        )}
+                        {txn.confidence === "low" && !txn.userTagged && (
+                          <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-400 align-middle" title="Category uncertain" />
+                        )}
+                      </td>
+                      <td className={`px-4 py-3 text-right tabular-nums font-medium whitespace-nowrap ${txn.type === "credit" ? "text-green-400" : "text-zinc-100"}`}>
+                        {txn.type === "credit" ? "+" : ""}{CAD2.format(txn.amount)}
+                      </td>
+                      {/* Category cell */}
+                      <td className="px-4 py-3">
+                        {editingTxnId === txn.id ? (
+                          <select
+                            autoFocus
+                            defaultValue={txn.category}
+                            onBlur={() => setEditingTxnId(null)}
+                            onChange={(e) => updateTxn(txn, { category: e.target.value })}
+                            className="rounded-md border border-blue-600 bg-zinc-800 px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          >
+                            {CATEGORIES.map((c) => (
+                              <option key={c} value={c}>{c}</option>
+                            ))}
+                          </select>
+                        ) : savingTxnId === txn.id ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-zinc-800 px-2.5 py-1 text-xs text-zinc-400">
+                            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-zinc-500" />
+                            Saving…
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => setEditingTxnId(txn.id)}
+                            className={[
+                              "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium hover:ring-1 hover:ring-blue-500 transition-all",
+                              txn.userTagged
+                                ? "bg-green-950/50 text-green-300"
+                                : txn.confidence === "low"
+                                ? "bg-amber-950/50 text-amber-300"
+                                : "bg-zinc-800 text-zinc-400",
+                            ].join(" ")}
+                            title="Click to change category"
+                          >
+                            {txn.category}
+                          </button>
+                        )}
+                      </td>
+                      {/* Necessity cell */}
+                      <td className="px-4 py-3">
+                        {editingNecessityId === txn.id ? (
+                          <select
+                            autoFocus
+                            defaultValue={txn.necessity}
+                            onBlur={() => setEditingNecessityId(null)}
+                            onChange={(e) => updateTxn(txn, { necessity: e.target.value })}
+                            className="rounded-md border border-blue-600 bg-zinc-800 px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          >
+                            {NECESSITIES.map((n) => (
+                              <option key={n} value={n}>{n}</option>
+                            ))}
+                          </select>
+                        ) : txn.necessity ? (
+                          <button
+                            onClick={() => setEditingNecessityId(txn.id)}
+                            className={[
+                              "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium hover:ring-1 hover:ring-blue-500 transition-all",
+                              necessityBadgeClass(txn.necessity),
+                            ].join(" ")}
+                            title="Click to change necessity"
+                          >
+                            {txn.necessity}
+                          </button>
+                        ) : (
+                          <span className="text-xs text-zinc-600">—</span>
+                        )}
+                      </td>
+                      {/* Exclude/transfer toggle */}
+                      <td className="px-4 py-3">
+                        {savingTxnId === txn.id ? null : (
+                          <button
+                            onClick={() => updateTxn(txn, { isTransfer: true })}
+                            className="rounded px-2 py-1 text-xs text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 border border-transparent hover:border-zinc-700 transition-colors"
+                            title="Exclude from totals (mark as transfer)"
+                          >
+                            ⇄
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {filteredTxns.length === 0 && (
+                <div className="px-6 py-8 text-center text-sm text-zinc-500">
+                  No transactions in this category.
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="pb-8 text-center text-xs text-zinc-500">

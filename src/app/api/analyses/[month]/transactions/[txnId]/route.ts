@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { updateTransactionCategory } from "@/lib/analysis-storage";
+import { updateTransaction } from "@/lib/analysis-storage";
 import { saveMerchantTag } from "@/lib/merchant-tags";
 
 export async function PATCH(
@@ -8,20 +8,31 @@ export async function PATCH(
 ) {
   try {
     const { month, txnId } = await params;
-    const { category, merchantKey } = await req.json() as {
-      category: string;
+    const body = await req.json() as {
+      category?: string;
+      necessity?: string;
+      isTransfer?: boolean;
+      type?: "debit" | "credit";
       merchantKey?: string;
     };
 
-    if (!category) {
-      return NextResponse.json({ error: "category required" }, { status: 400 });
+    const { category, necessity, isTransfer, type, merchantKey } = body;
+
+    if (category === undefined && necessity === undefined && isTransfer === undefined && type === undefined) {
+      return NextResponse.json({ error: "at least one field required" }, { status: 400 });
     }
 
-    const ok = await updateTransactionCategory(month, txnId, category);
+    const patch: Parameters<typeof updateTransaction>[2] = {};
+    if (category !== undefined) patch.category = category;
+    if (necessity !== undefined) patch.necessity = necessity;
+    if (isTransfer !== undefined) patch.isTransfer = isTransfer;
+    if (type !== undefined) patch.type = type;
+
+    const ok = await updateTransaction(month, txnId, patch);
     if (!ok) return NextResponse.json({ error: "Transaction not found" }, { status: 404 });
 
     // Persist merchant → category mapping for future analyses
-    if (merchantKey) {
+    if (category && merchantKey) {
       await saveMerchantTag(merchantKey, category);
     }
 

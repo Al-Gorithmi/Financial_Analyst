@@ -106,16 +106,20 @@ export function tagTransactionsWithMerchantKeys(
   });
 }
 
-export async function updateTransactionCategory(
+export async function updateTransaction(
   month: string,
   txnId: string,
-  category: string
+  patch: Partial<Pick<SavedTransaction, "category" | "necessity" | "isTransfer" | "type">>
 ): Promise<boolean> {
   const analysis = await loadAnalysis(month);
   if (!analysis) return false;
   const txn = analysis.transactions.find((t) => t.id === txnId);
   if (!txn) return false;
-  txn.category = category;
+
+  if (patch.category !== undefined) txn.category = patch.category;
+  if (patch.necessity !== undefined) txn.necessity = patch.necessity;
+  if (patch.isTransfer !== undefined) txn.isTransfer = patch.isTransfer;
+  if (patch.type !== undefined) txn.type = patch.type;
   txn.userTagged = true;
 
   // Recompute aggregates so home page and all consumers see fresh data
@@ -139,10 +143,22 @@ export async function updateTransactionCategory(
   try {
     const { getDb } = await import("./db");
     const db = getDb();
-    db.prepare(`UPDATE transactions SET category = ?, userTagged = 1 WHERE id = ?`).run(category, txnId);
+    const fields: string[] = ["userTagged = 1"];
+    const values: (string | number)[] = [];
+    if (patch.category !== undefined) { fields.push("category = ?"); values.push(patch.category); }
+    if (patch.necessity !== undefined) { fields.push("necessity = ?"); values.push(patch.necessity); }
+    if (patch.isTransfer !== undefined) { fields.push("isTransfer = ?"); values.push(patch.isTransfer ? 1 : 0); }
+    if (patch.type !== undefined) { fields.push("type = ?"); values.push(patch.type); }
+    values.push(txnId);
+    getDb().prepare(`UPDATE transactions SET ${fields.join(", ")} WHERE id = ?`).run(...values);
   } catch { /* non-fatal */ }
 
   return true;
+}
+
+/** @deprecated use updateTransaction */
+export async function updateTransactionCategory(month: string, txnId: string, category: string): Promise<boolean> {
+  return updateTransaction(month, txnId, { category });
 }
 
 export async function patchAnalysisNarrative(month: string, narrative: string): Promise<boolean> {
