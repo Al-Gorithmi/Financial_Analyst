@@ -286,27 +286,19 @@ export default function MonthAnalysisPage() {
   }, [month]);
 
   const reanalyze = useCallback(async () => {
-    if (!analysis) return;
-    if (!confirm("Re-run AI analysis for this month? Your manual category edits will be reset.")) return;
     setReanalyzing(true);
     setReanalyzeError("");
     try {
-      const res = await fetch("/api/analyse-month", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ month: analysis.month, statementIds: analysis.statementIds }),
-      });
+      const res = await fetch(`/api/analyses/${month}/insights`, { method: "POST" });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Reanalysis failed");
-      // Re-fetch the updated analysis
-      const fresh = await fetch(`/api/analyses/${month}`).then(r => r.json());
-      setAnalysis(fresh);
+      if (!res.ok) throw new Error(data.error ?? "Failed");
+      setAnalysis(prev => prev ? { ...prev, insights: data.insights } : prev);
     } catch (e) {
-      setReanalyzeError(e instanceof Error ? e.message : "Reanalysis failed");
+      setReanalyzeError(e instanceof Error ? e.message : "Failed to regenerate insights");
     } finally {
       setReanalyzing(false);
     }
-  }, [analysis, month]);
+  }, [month]);
 
   // Navigation: prev/next months
   const [year, monthNum] = month ? month.split("-").map(Number) : [0, 0];
@@ -393,9 +385,9 @@ export default function MonthAnalysisPage() {
             {reanalyzing ? (
               <span className="flex items-center gap-1.5">
                 <span className="h-3 w-3 animate-spin rounded-full border-2 border-zinc-600 border-t-zinc-300" />
-                Reanalyzing…
+                Regenerating…
               </span>
-            ) : "Reanalyze"}
+            ) : "Regen Insights"}
           </button>
         </div>
       </div>
