@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callLLM, DEFAULT_MODEL } from "@/lib/llm";
-import { loadConfig } from "@/lib/config-storage";
 import { withSpan } from "@/lib/telemetry";
 import { loadStatement } from "@/lib/storage";
 import { saveAnalysis, tagTransactionsWithMerchantKeys } from "@/lib/analysis-storage";
