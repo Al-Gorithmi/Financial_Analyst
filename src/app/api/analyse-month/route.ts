@@ -270,7 +270,6 @@ export async function POST(req: NextRequest) {
     });
 
     // Advance latestAnalyzedDate if this month is more recent
-    const config = await loadConfig();
     const monthCutoff = `${month}-28`;
     if (!config.latestAnalyzedDate || monthCutoff > config.latestAnalyzedDate) {
       await saveConfig({ latestAnalyzedDate: monthCutoff });
