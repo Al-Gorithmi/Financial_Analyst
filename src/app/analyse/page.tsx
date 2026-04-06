@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { parseMarkdownTable, parseAmount } from "@/lib/parse-table";
 import type { RawTxnRow } from "@/lib/parse-table";
+import ModelPicker from "@/components/ModelPicker";
 
 interface StatementMeta {
   id: string;
@@ -54,11 +55,17 @@ function AnalyseContent() {
   const [statuses, setStatuses] = useState<Record<string, MonthStatus>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [doneCount, setDoneCount] = useState(0);
+  const [selectedModel, setSelectedModel] = useState("local:gemma4:e2b");
 
   useEffect(() => {
     if (ids.length === 0) { setError("No statement IDs provided."); setLoading(false); return; }
 
     (async () => {
+      // Load persisted model
+      fetch("/api/config").then(r => r.json()).then((cfg: { selectedModel?: string }) => {
+        if (cfg.selectedModel) setSelectedModel(cfg.selectedModel);
+      }).catch(() => {});
+
       try {
         const stmts: StatementMeta[] = await Promise.all(
           ids.map(id =>
@@ -136,7 +143,7 @@ function AnalyseContent() {
       const res = await fetch("/api/analyse-month", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ month: group.month, statementIds: group.statementIds }),
+        body: JSON.stringify({ month: group.month, statementIds: group.statementIds, model: selectedModel }),
       });
       if (!res.ok) {
         const text = await res.text();
@@ -169,10 +176,17 @@ function AnalyseContent() {
 
   return (
     <div className="min-h-screen bg-zinc-950">
-      <div className="border-b border-zinc-800 px-8 py-3.5 flex items-center justify-between">
+      <div className="border-b border-zinc-800 px-8 py-3.5 flex items-center justify-between gap-4">
         <h1 className="text-sm font-semibold text-zinc-100">Analyse by Month</h1>
+        <ModelPicker
+          value={selectedModel}
+          onChange={model => {
+            setSelectedModel(model);
+            fetch("/api/config", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selectedModel: model }) }).catch(() => {});
+          }}
+        />
         {months.length > 0 && (
-          <p className="text-xs text-zinc-500">
+          <p className="text-xs text-zinc-500 ml-auto">
             {months.reduce((s, m) => s + m.rows.length, 0)} transactions · {months.length} month{months.length !== 1 ? "s" : ""}
           </p>
         )}

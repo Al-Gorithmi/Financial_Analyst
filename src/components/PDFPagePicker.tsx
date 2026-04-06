@@ -13,7 +13,7 @@ if (typeof window !== "undefined") {
 
 interface Props {
   file: File;
-  onConfirm: (selectedPages: number[]) => void; // 1-indexed page numbers
+  onConfirm: (selectedPages: number[], images: string[]) => void; // pages: 1-indexed, images: base64 PNG at 1.5×
 }
 
 export default function PDFPagePicker({ file, onConfirm }: Props) {
@@ -76,11 +76,28 @@ export default function PDFPagePicker({ file, onConfirm }: Props) {
     else setSelected(new Set(thumbs.map((_, i) => i)));
   }
 
-  function handleConfirm() {
-    if (selected.size === 0) return;
-    // Convert 0-indexed to 1-indexed page numbers
-    const pages = [...selected].sort((a, b) => a - b).map(i => i + 1);
-    onConfirm(pages);
+  const [rendering, setRendering] = useState(false);
+
+  async function handleConfirm() {
+    if (selected.size === 0 || !pdfRef.current) return;
+    setRendering(true);
+    try {
+      const sortedIndices = [...selected].sort((a, b) => a - b);
+      const pages = sortedIndices.map(i => i + 1);
+      const images: string[] = [];
+      for (const idx of sortedIndices) {
+        const page = await pdfRef.current.getPage(idx + 1);
+        const viewport = page.getViewport({ scale: 1.5 }); // high-res for OCR
+        const canvas = document.createElement("canvas");
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        await page.render({ canvasContext: canvas.getContext("2d")!, viewport }).promise;
+        images.push(canvas.toDataURL("image/png").split(",")[1]);
+      }
+      onConfirm(pages, images);
+    } finally {
+      setRendering(false);
+    }
   }
 
   const selectedCount = selected.size;
@@ -148,10 +165,15 @@ export default function PDFPagePicker({ file, onConfirm }: Props) {
         <div className="flex items-center gap-3 pt-1">
           <button
             onClick={handleConfirm}
-            disabled={selectedCount === 0}
+            disabled={selectedCount === 0 || rendering}
             className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50"
           >
-            {`Extract from ${selectedCount} page${selectedCount !== 1 ? "s" : ""}`}
+            {rendering ? (
+              <>
+                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                Preparing…
+              </>
+            ) : `Extract from ${selectedCount} page${selectedCount !== 1 ? "s" : ""}`}
           </button>
           <span className="text-xs text-zinc-500">{selectedCount} of {thumbs.length} pages selected</span>
         </div>

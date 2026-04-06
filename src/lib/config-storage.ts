@@ -5,6 +5,7 @@ const CONFIG_FILE = path.join(process.cwd(), "data", "config.json");
 
 export interface AppConfig {
   latestAnalyzedDate?: string; // YYYY-MM-DD — everything up to and including this date is analysed
+  selectedModel?: string;      // "local:gemma4:e2b" | "claude:claude-sonnet-4-6" | "openai:gpt-5"
 }
 
 export async function loadConfig(): Promise<AppConfig> {

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import AnalysisSummary from "@/components/AnalysisSummary";
+import ModelPicker from "@/components/ModelPicker";
 import type { SavedAnalysis, SavedTransaction, MonthInsights } from "@/lib/analysis-storage";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -227,6 +228,7 @@ export default function MonthAnalysisPage() {
   const [txnTab, setTxnTab] = useState<"spending" | "income" | "transfers">("spending");
   const [reanalyzing, setReanalyzing] = useState(false);
   const [reanalyzeError, setReanalyzeError] = useState("");
+  const [selectedModel, setSelectedModel] = useState("local:gemma4:e2b");
 
   useEffect(() => {
     if (!month) return;
@@ -237,13 +239,21 @@ export default function MonthAnalysisPage() {
       })
       .then((data: SavedAnalysis) => { setAnalysis(data); setLoading(false); })
       .catch((e) => { setError(e.message); setLoading(false); });
+    fetch("/api/config")
+      .then(r => r.json())
+      .then((cfg: { selectedModel?: string }) => { if (cfg.selectedModel) setSelectedModel(cfg.selectedModel); })
+      .catch(() => {});
   }, [month]);
 
   const generateInsights = useCallback(async () => {
     setGeneratingInsights(true);
     setInsightsError("");
     try {
-      const res = await fetch(`/api/analyses/${month}/insights`, { method: "POST" });
+      const res = await fetch(`/api/analyses/${month}/insights`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: selectedModel }),
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed");
       setAnalysis(prev => prev ? { ...prev, insights: data.insights } : prev);
@@ -289,7 +299,11 @@ export default function MonthAnalysisPage() {
     setReanalyzing(true);
     setReanalyzeError("");
     try {
-      const res = await fetch(`/api/analyses/${month}/insights`, { method: "POST" });
+      const res = await fetch(`/api/analyses/${month}/insights`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: selectedModel }),
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed");
       setAnalysis(prev => prev ? { ...prev, insights: data.insights } : prev);
@@ -366,9 +380,16 @@ export default function MonthAnalysisPage() {
 
   return (
     <div className="min-h-screen bg-zinc-950">
-      <div className="border-b border-zinc-800 px-8 py-3.5 flex items-center justify-between">
+      <div className="border-b border-zinc-800 px-8 py-3.5 flex items-center justify-between gap-4">
         <h1 className="text-sm font-semibold text-zinc-100">{analysis.period}</h1>
-        <div className="flex items-center gap-2">
+        <ModelPicker
+          value={selectedModel}
+          onChange={model => {
+            setSelectedModel(model);
+            fetch("/api/config", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selectedModel: model }) }).catch(() => {});
+          }}
+        />
+        <div className="flex items-center gap-2 ml-auto">
           <Link href={`/analyses/${prevMonth}`} className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-400 hover:bg-zinc-800">
             ← Prev
           </Link>

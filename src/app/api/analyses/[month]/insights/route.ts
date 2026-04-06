@@ -1,15 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { loadAnalysis, saveAnalysis } from "@/lib/analysis-storage";
-import { anthropic } from "@/lib/claude";
+import { callLLM, DEFAULT_MODEL } from "@/lib/llm";
+import { loadConfig } from "@/lib/config-storage";
 import { withSpan } from "@/lib/telemetry";
 import { jsonrepair } from "jsonrepair";
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ month: string }> }
 ) {
   try {
     const { month } = await params;
+
+    // Allow model override from request body; fall back to config then default
+    let model = DEFAULT_MODEL;
+    try {
+      const body = await req.json().catch(() => ({})) as { model?: string };
+      const config = await loadConfig();
+      model = body.model ?? config.selectedModel ?? DEFAULT_MODEL;
+    } catch { /* use default */ }
+
     const analysis = await loadAnalysis(month);
     if (!analysis) {
       return NextResponse.json({ error: "Analysis not found" }, { status: 404 });
@@ -33,15 +43,10 @@ ${merchantLines}
 Return exactly:
 { "observations": ["3-4 key observations about spending patterns"], "recommendations": ["3-4 specific actionable tips"], "savings": ["2-3 concrete opportunities with estimated monthly dollar amounts, e.g. \\"Brew coffee at home instead of daily café visits: save ~$60/mo\\""] }`;
 
-    const msg = await withSpan("claude.insights", { month }, () =>
-      anthropic.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 1024,
-        messages: [{ role: "user", content: prompt }],
-      })
+    const raw = await withSpan("llm.insights", { month, model }, () =>
+      callLLM(prompt, { model, maxTokens: 1024 })
     );
 
-    const raw = msg.content[0].type === "text" ? msg.content[0].text : "";
     const stripped = raw.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/i, "").trim();
     const insights = JSON.parse(jsonrepair(stripped));
 

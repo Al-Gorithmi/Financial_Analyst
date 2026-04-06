@@ -6,6 +6,7 @@ import Link from "next/link";
 import UploadZone from "@/components/UploadZone";
 import ScrubPreview from "@/components/ScrubPreview";
 import PDFPagePicker from "@/components/PDFPagePicker";
+import ModelPicker from "@/components/ModelPicker";
 
 // ─── Draft persistence (localStorage) ─────────────────────────────────────────
 
@@ -75,6 +76,19 @@ export default function UploadPage() {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [navigating, setNavigating] = useState(false);
   const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [selectedModel, setSelectedModel] = useState("local:gemma4:e2b");
+
+  // Load persisted model on mount
+  useEffect(() => {
+    fetch("/api/config").then(r => r.json()).then((cfg: { selectedModel?: string }) => {
+      if (cfg.selectedModel) setSelectedModel(cfg.selectedModel);
+    }).catch(() => {});
+  }, []);
+
+  function handleModelChange(model: string) {
+    setSelectedModel(model);
+    fetch("/api/config", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ selectedModel: model }) }).catch(() => {});
+  }
 
   // Load drafts on mount
   useEffect(() => {
@@ -117,34 +131,41 @@ export default function UploadPage() {
   }
 
   // Called when user confirms page selection in the picker
-  async function onPagesConfirmed(entryId: string, selectedPages: number[]) {
+  async function onPagesConfirmed(entryId: string, selectedPages: number[], images: string[]) {
     updateEntry(entryId, { status: "converting" });
 
     const entry = entries.find(e => e.id === entryId)!;
-
-    // Read the PDF file as base64
-    let pdfBase64: string;
-    try {
-      const arrayBuffer = await entry.file.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
-      let binary = "";
-      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-      pdfBase64 = btoa(binary);
-    } catch (err) {
-      updateEntry(entryId, { status: "error", error: "Failed to read PDF file" });
-      return;
-    }
+    const isLocal = selectedModel.startsWith("local:");
 
     let rawText: string;
     try {
-      const res = await fetch("/api/parse-pdf-vision", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pdf: pdfBase64, pages: selectedPages }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      rawText = data.text;
+      if (isLocal) {
+        // Local model: send high-res page images directly
+        const localModelName = selectedModel.slice(6);
+        const res = await fetch("/api/parse-pdf-local", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ images, model: localModelName }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        rawText = data.text;
+      } else {
+        // Cloud model (Claude): send raw PDF
+        const arrayBuffer = await entry.file.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+        let binary = "";
+        for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+        const pdfBase64 = btoa(binary);
+        const res = await fetch("/api/parse-pdf-vision", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pdf: pdfBase64, pages: selectedPages }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        rawText = data.text;
+      }
     } catch (err) {
       updateEntry(entryId, {
         status: "error",
@@ -289,8 +310,9 @@ export default function UploadPage() {
 
   return (
     <div className="min-h-screen bg-zinc-950">
-      <div className="border-b border-zinc-800 px-8 py-3.5 flex items-center justify-between">
+      <div className="border-b border-zinc-800 px-8 py-3.5 flex items-center justify-between gap-4">
         <h1 className="text-sm font-semibold text-zinc-100">Upload Statements</h1>
+        <ModelPicker value={selectedModel} onChange={handleModelChange} />
         {approvedEntries.length > 0 && (
           <button
             className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50"
@@ -365,7 +387,7 @@ export default function UploadPage() {
                 onScrubChange={(finalScrubbedText, manualTerms) =>
                   updateEntry(entry.id, { finalScrubbedText, manualTerms })
                 }
-                onPagesConfirmed={(pageImages) => onPagesConfirmed(entry.id, pageImages)}
+                onPagesConfirmed={(pages, images) => onPagesConfirmed(entry.id, pages, images)}
               />
             ))}
           </div>
@@ -383,7 +405,7 @@ interface FileCardProps {
   onRemove: () => void;
   onTogglePreview: () => void;
   onScrubChange: (finalScrubbedText: string, manualTerms: string[]) => void;
-  onPagesConfirmed: (selectedPages: number[]) => void;
+  onPagesConfirmed: (selectedPages: number[], images: string[]) => void;
 }
 
 function FileCard({ entry, onApprove, onRemove, onTogglePreview, onScrubChange, onPagesConfirmed }: FileCardProps) {

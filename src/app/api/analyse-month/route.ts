@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { anthropic } from "@/lib/claude";
-import { openai } from "@/lib/openai";
+import { callLLM, DEFAULT_MODEL } from "@/lib/llm";
+import { loadConfig } from "@/lib/config-storage";
 import { withSpan } from "@/lib/telemetry";
 import { loadStatement } from "@/lib/storage";
 import { saveAnalysis, tagTransactionsWithMerchantKeys } from "@/lib/analysis-storage";
@@ -76,7 +76,10 @@ Return exactly:
 
 export async function POST(req: NextRequest) {
   try {
-    const { month, statementIds } = await req.json() as { month: string; statementIds: string[] };
+    const body = await req.json() as { month: string; statementIds: string[]; model?: string };
+    const { month, statementIds } = body;
+    const config = await loadConfig();
+    const model = body.model ?? config.selectedModel ?? DEFAULT_MODEL;
 
     if (!month || !Array.isArray(statementIds) || statementIds.length === 0) {
       return NextResponse.json({ error: "month and statementIds required" }, { status: 400 });
@@ -122,39 +125,12 @@ export async function POST(req: NextRequest) {
       : "";
     const userPrompt = buildUserPrompt(compactRows, knownTagsJson, rulesHint);
 
-    // Call LLM — Claude primary, OpenAI fallback
-    let raw = "";
+    // Call LLM — route through unified callLLM
+    const raw = await withSpan("llm.analyse_month", { month, "txn.count": compactRows.length, model }, () =>
+      callLLM(`${SYSTEM_PROMPT}\n\n${userPrompt}`, { model, maxTokens: 8192 })
+    );
 
-    try {
-      const msg = await withSpan("claude.analyse_month", { month, "txn.count": compactRows.length }, () =>
-        anthropic.messages.create({
-          model: "claude-sonnet-4-6",
-          max_tokens: 8192,
-          messages: [
-            { role: "user", content: `${SYSTEM_PROMPT}\n\n${userPrompt}` },
-          ],
-        })
-      );
-      raw = msg.content[0].type === "text" ? msg.content[0].text : "";
-    } catch (err) {
-      console.warn("[analyse-month] Claude failed, trying OpenAI:", err);
-    }
-
-    if (!raw) {
-      const completion = await withSpan("openai.analyse_month", { month, "txn.count": compactRows.length, model: "gpt-5" }, () =>
-        openai.chat.completions.create({
-          model: "gpt-5",
-          max_completion_tokens: 8192,
-          messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content: userPrompt },
-          ],
-        })
-      );
-      raw = completion.choices[0]?.message?.content ?? "";
-    }
-
-    if (!raw) throw new Error("Both Claude and OpenAI returned empty responses");
+    if (!raw) throw new Error("LLM returned empty response");
 
     // Parse LLM tags
     const stripped = raw.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/i, "").trim();
@@ -230,14 +206,9 @@ export async function POST(req: NextRequest) {
     // Generate spending insights
     let insights: { observations: string[]; recommendations: string[]; savings: string[] } | undefined;
     try {
-      const insightsMsg = await withSpan("claude.insights", { month }, () =>
-        anthropic.messages.create({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1024,
-          messages: [{ role: "user", content: buildInsightsPrompt(period, totalSpend, categories, topMerchants) }],
-        })
+      const insightsRaw = await withSpan("llm.insights", { month, model }, () =>
+        callLLM(buildInsightsPrompt(period, totalSpend, categories, topMerchants), { model, maxTokens: 1024 })
       );
-      const insightsRaw = insightsMsg.content[0].type === "text" ? insightsMsg.content[0].text : "";
       const insightsStripped = insightsRaw.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/i, "").trim();
       insights = JSON.parse(jsonrepair(insightsStripped));
     } catch (err) {
